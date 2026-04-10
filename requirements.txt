@@ -1,0 +1,7 @@
+flask
+pandas
+numpy
+joblib
+scikit-learn
+prometheus-flask-exporter==0.22.4
+gunicorn==20.1.0

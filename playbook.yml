@@ -1,0 +1,84 @@
+---
+- name: Deploy Disease Prediction Webapp to AWS
+  hosts: aws_servers  # This matches the group in your 'inventory' file
+  become: yes         # This allows running commands with 'sudo'
+
+  vars:
+    project_dir: "/home/ubuntu/disease_app" # Directory on the server
+
+  tasks:
+    - name: 1. Update APT cache and install system packages
+      ansible.builtin.apt:
+        name:
+          - python3-pip
+          - python3-venv
+        state: present
+        update_cache: yes
+      tags:
+        - setup
+
+    - name: 2. Create project directory on the server
+      ansible.builtin.file:
+        path: "{{ project_dir }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+      tags:
+        - setup
+
+    - name: 3. Copy project files to the server
+      # This copies everything from your local folder to the server
+      # It excludes your local venv and .git folder
+      ansible.posix.synchronize:
+        src: ./
+        dest: "{{ project_dir }}"
+        archive: yes
+        rsync_opts:
+          - "--exclude=venv"
+          - "--exclude=.git"
+          - "--exclude=.gitignore"
+          - "--exclude=*.pem"
+      tags:
+        - deploy
+
+    - name: 4. Create a virtual environment on the server
+      ansible.builtin.command:
+        cmd: "python3 -m venv {{ project_dir }}/venv"
+        creates: "{{ project_dir }}/venv" # Won't run if venv already exists
+      tags:
+        - install
+
+    - name: 5. Install Python packages in the server's venv
+      ansible.builtin.pip:
+        requirements: "{{ project_dir }}/requirements.txt"
+        virtualenv: "{{ project_dir }}/venv"
+      tags:
+        - install
+
+    - name: 6. (Optional) Kill any existing running app
+      # This is useful for re-deployments
+      ansible.builtin.shell: "pkill -f 'python app.py' || true"
+      register: pkill_result
+      changed_when: "'killed' in pkill_result.stdout"
+      failed_when: false
+      tags:
+        - run
+
+    - name: 7. Start the Flask application in the background
+      ansible.builtin.shell:
+        cmd: "nohup ./venv/bin/python app.py > app.log 2>&1 &"
+      args:
+        chdir: "{{ project_dir }}" # Change to this directory before running
+      changed_when: false # This command always reports 'changed', so we fix it
+      tags:
+        - run
+
+    - name: 8. Wait for the app to start
+      ansible.builtin.wait_for:
+        port: 5000
+        state: started
+        timeout: 15
+        delay: 5
+      tags:
+        - run

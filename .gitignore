@@ -1,0 +1,13 @@
+venv/
+__pycache__/
+*.pyc
+
+# Terraform (The big stuff)
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+.terraform.lock.hcl
+
+# Environment/Keys
+.env
+*.pem

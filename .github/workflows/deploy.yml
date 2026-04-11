@@ -19,7 +19,7 @@ jobs:
 
       - name: Build and Push Docker Image
         run: |
-          docker build -t ${{ secrets.DOCKER_USERNAME }}/disease-prediction-app:latest .
+          docker build -t ${{ secrets.S_DOCKER_USERNAME }}/disease-prediction-app:latest .
           docker push ${{ secrets.DOCKER_USERNAME }}/disease-prediction-app:latest
 
       - name: Configure AWS Credentials
@@ -33,4 +33,6 @@ jobs:
         run: aws eks update-kubeconfig --name disease-prediction-cluster --region us-east-1
 
       - name: Deploy to EKS
-        run: kubectl apply -f disease-app.yaml
+        run: |
+          kubectl apply -f disease-app.yaml
+          kubectl rollout restart deployment/disease-prediction

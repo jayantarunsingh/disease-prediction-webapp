@@ -1,96 +1,55 @@
-// This file defines all the AWS resources Terraform will create.
-
-// 1. Configure the AWS Provider
-terraform {
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.0"
-    }
-  }
-}
-
 provider "aws" {
-  region = var.aws_region
+  region = "us-east-1"
 }
 
-// 2. Find the latest Ubuntu 22.04 (Jammy) AMI
-data "aws_ami" "ubuntu" {
-  most_recent = true
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
-  }
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-  owners = ["099720109477"] // Canonical's AWS owner ID
+# 1. Access the Availability Zones available in us-east-1
+data "aws_availability_zones" "available" {}
+
+# 2. Create the VPC for your Cluster
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 5.0"
+
+  name = "disease-prediction-vpc"
+  cidr = "10.0.0.0/16"
+
+  # Use 2 AZs for high availability within the cluster
+  azs             = slice(data.aws_availability_zones.available.names, 0, 2)
+  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24"]
+  
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+  
+  # Ensures nodes get a Public IP to connect to the EKS Control Plane
+  map_public_ip_on_launch = true
 }
 
-// 3. Define the Security Group (Firewall)
-resource "aws_security_group" "app_sg" {
-  name        = "app-sg-terraform"
-  description = "Allow SSH and App access"
+# 3. The EKS Cluster (The Brain)
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "~> 20.0"
 
-  // Allow SSH (Port 22) from anywhere
-  ingress {
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  cluster_name    = "disease-prediction-cluster"
+  cluster_version = "1.30"
 
-  // Allow our Flask App (Port 5000) from anywhere
-  ingress {
-    from_port   = 5000
-    to_port     = 5000
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  cluster_endpoint_public_access = true
 
-  // Allow all outbound traffic (for apt update, pip install)
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
+  vpc_id     = module.vpc.vpc_id
+  subnet_ids = module.vpc.public_subnets
 
-  tags = {
-    Name = "App-SG (Terraform)"
-  }
-}
+  # Automatically adds your IAM user as an administrator of the cluster
+  enable_cluster_creator_admin_permissions = true
 
-// 4. Define the EC2 Instance
-resource "aws_instance" "app_server" {
-  ami                    = data.aws_ami.ubuntu.id
-  instance_type          = var.instance_type
-  key_name               = var.key_name // The key you imported to AWS
-  vpc_security_group_ids = [aws_security_group.app_sg.id]
+  eks_managed_node_groups = {
+    default = {
+      # m7i-flex.large provides 2 vCPU and 8GB RAM 
+      # This fixes the "Too many pods" error (ENI limit)
+      instance_types = ["m7i-flex.large"]
+      ami_type       = "AL2023_x86_64_STANDARD"
 
-  // Wait for the instance to be ready before proceeding
-  provisioner "remote-exec" {
-    inline = ["echo 'Instance is ready for Ansible'"]
-
-    connection {
-      type        = "ssh"
-      user        = "ubuntu"
-      private_key = file(var.key_path)
-      host        = self.public_ip
+      min_size     = 1
+      max_size     = 1
+      desired_size = 1
     }
   }
-
-  tags = {
-    Name = "Disease-Prediction-Server (Terraform)"
-  }
-}
-
-// 5. (THE MAGIC) Automatically generate an Ansible inventory file
-resource "local_file" "ansible_inventory" {
-  filename = "terraform_inventory.ini" // This is the new inventory file
-  content = templatefile("inventory.tftpl", {
-    host_ip  = aws_instance.app_server.public_ip,
-    key_path = var.key_path
-  })
 }
